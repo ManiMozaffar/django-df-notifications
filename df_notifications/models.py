@@ -41,6 +41,7 @@ class AbstractNotificationBase(models.Model):
 
 
 class NotificationHistory(AbstractNotificationBase):
+    template =
     id = models.BigAutoField(
         verbose_name=_("ID"),
         primary_key=True,
@@ -53,105 +54,148 @@ class NotificationHistory(AbstractNotificationBase):
     class Meta:
         verbose_name_plural = "Notification history"
 
+class NotificationsRoute(models.Model):
+    channel_class = models.CharField(choices=settings.DF_NOTIFICATIONS["channels"] # need a way to prevent migrations)
+    channel_config = models.JSONField()
+    template_prefix = models.CharField()
 
-class NotificationTemplate(AbstractNotificationBase):
-    history = models.ManyToManyField(NotificationHistory, blank=True)
-    slug = models.CharField(max_length=255, unique=True)
 
-    email_template = "df_notifications/base_email.html"
-    slack_template = "df_notifications/base_slack.html"
 
-    def get_device_queryset(self):
-        return UserDevice.objects.all()
+class NotificationTrigger(models.Model):
+    name = models.CharField(max_length=64)
+    routes = models.ManyToManyField()
 
-    def send(
-        self,
-        users=None,
-        context=None,
-        attachments=None,
-    ):
-        users = users or []
-        attachments = attachments or []
-        """
-        :param users: users to be notified
-        :param context: context
-        :param attachments: attachments for email
-        :return: history object
-        """
 
-        _context = Context(context)
+class NotificationAutomation(models.Model):
+    trigger = model trigger
+    condition =  next, previous, context?
+    action = send_notification (template? users? channels?)
+    template = CharField
+    router = code(next, previous, context) -> (template ,users, channels)
 
-        subject = Template("".join(self.subject.splitlines())).render(_context)
+    # DF_NOTIFICATIONS["channels"] = (('email', 'df_notifications.channels.EmailChannel))
+# NotificationRoute(channels='webhook', extra_context='{base_url: xx'))
+# NotificationRoute(channels='webhook', extra_context='{base_url: yy'))
 
-        data = json.loads(Template(self.data).render(_context)) if self.data else {}
-        body = Template(self.body).render(_context)
 
-        body_html = Template(
-            (
-                f'{{% extends "{self.email_template}"%}}{{% block body %}}'
-                f"{self.body_html}{{% endblock %}}"
-            )
-            if self.channel == NotificationChannels.EMAIL
-            else self.body_html
-        ).render(_context)
+# Example: notifications/bookings/new_booking
+# The we render {template_prefix}_subject
+# The we render {template_prefix}_body
+# The we render {template_prefix}_body_html
+# The we render {template_prefix}_data
+# and so on....
+# We can fall back to _body if body_html does not exist
+# also have email_body_html -> email_body -> body etc
+# template will be notificaations/channel/prefix
+# notifications/push/base_body.txt
+# notifications/push/base_email_subject.txt
+# notifications/base_body.html
+# class Djangoflow:
+#     required_apps = [
+#         "df_notifications",
+#         "fcm_django",
+#         "django_slack",
+#     ]
+#     api_path = "notifications/"
 
-        if self.channel == NotificationChannels.EMAIL:
-            to_emails = [user.email for user in users if user.email]
-            msg = EmailMultiAlternatives(subject=subject, to=to_emails, body=body)
-            msg.attach_alternative(body_html, "text/html")
-            for attachment in attachments:
-                msg.attach(**attachment)
-            msg.send()
-        elif self.channel == NotificationChannels.PUSH:
-            devices = self.get_device_queryset().filter(
-                user__in=users,
-            )
-            devices.send_message(
-                Message(
-                    notification=Notification(
-                        title=subject,
-                        body=body,
-                    ),
-                    data=data,
-                ),
-            )
-        elif self.channel == NotificationChannels.SLACK:
-            slack_message(
-                self.slack_template,
-                context=context,
-                attachments=[{"text": body, "title": subject}],
-            )
-        elif self.channel == NotificationChannels.WEBHOOK:
-            requests.post(subject, data=body, json=data)
-        elif self.channel == NotificationChannels.CONSOLE:
-            logging.info(f"Notification: {subject}")
-        else:
-            raise NotImplementedError
-
-        history = NotificationHistory.objects.create(
-            channel=self.channel,
-            data=data,
-            body=body,
-            subject=subject,
-            body_html=body_html,
-        )
-        history.users.set(users)
-        self.history.add(history)
-        return history
-
-    def save(self, *args, **kwargs):
-        self.data = json.dumps(json.loads(self.data))
-        super().save(*args, **kwargs)
-
-    def send_async(self, users, instance, context=None):
-        send_notification_async.delay(
-            self.pk,
-            [str(user.pk) for user in users],
-            instance._meta.label_lower,
-            str(instance.pk),
-            additional_context=context,
-        )
-
+# class NotificationTemplate(AbstractNotificationBase):
+#     history = models.ManyToManyField(NotificationHistory, blank=True)
+#     slug = models.CharField(max_length=255, unique=True)
+#
+#     email_template = "df_notifications/base_email.html"
+#     slack_template = "df_notifications/base_slack.html"
+#
+#     def get_device_queryset(self):
+#         return UserDevice.objects.all()
+#
+#     def send(
+#         self,
+#         users=None,
+#         context=None,
+#         attachments=None,
+#     ):
+#         users = users or []
+#         attachments = attachments or []
+#         """
+#         :param users: users to be notified
+#         :param context: context
+#         :param attachments: attachments for email
+#         :return: history object
+#         """
+#
+#         _context = Context(context)
+#
+#         subject = Template("".join(self.subject.splitlines())).render(_context)
+#
+#         data = json.loads(Template(self.data).render(_context)) if self.data else {}
+#         body = Template(self.body).render(_context)
+#
+#         body_html = Template(
+#             (
+#                 f'{{% extends "{self.email_template}"%}}{{% block body %}}'
+#                 f"{self.body_html}{{% endblock %}}"
+#             )
+#             if self.channel == NotificationChannels.EMAIL
+#             else self.body_html
+#         ).render(_context)
+#
+#         if self.channel == NotificationChannels.EMAIL:
+#             to_emails = [user.email for user in users if user.email]
+#             msg = EmailMultiAlternatives(subject=subject, to=to_emails, body=body)
+#             msg.attach_alternative(body_html, "text/html")
+#             for attachment in attachments:
+#                 msg.attach(**attachment)
+#             msg.send()
+#         elif self.channel == NotificationChannels.PUSH:
+#             devices = self.get_device_queryset().filter(
+#                 user__in=users,
+#             )
+#             devices.send_message(
+#                 Message(
+#                     notification=Notification(
+#                         title=subject,
+#                         body=body,
+#                     ),
+#                     data=data,
+#                 ),
+#             )
+#         elif self.channel == NotificationChannels.SLACK:
+#             slack_message(
+#                 self.slack_template,
+#                 context=context,
+#                 attachments=[{"text": body, "title": subject}],
+#             )
+#         elif self.channel == NotificationChannels.WEBHOOK:
+#             requests.post(subject, data=body, json=data)
+#         elif self.channel == NotificationChannels.CONSOLE:
+#             logging.info(f"Notification: {subject}")
+#         else:
+#             raise NotImplementedError
+#
+#         history = NotificationHistory.objects.create(
+#             channel=self.channel,
+#             data=data,
+#             body=body,
+#             subject=subject,
+#             body_html=body_html,
+#         )
+#         history.users.set(users)
+#         self.history.add(history)
+#         return history
+#
+#     def save(self, *args, **kwargs):
+#         self.data = json.dumps(json.loads(self.data))
+#         super().save(*args, **kwargs)
+#
+#     def send_async(self, users, instance, context=None):
+#         send_notification_async.delay(
+#             self.pk,
+#             [str(user.pk) for user in users],
+#             instance._meta.label_lower,
+#             str(instance.pk),
+#             additional_context=context,
+#         )
+#
 
 @app.task
 def send_notification_async(
